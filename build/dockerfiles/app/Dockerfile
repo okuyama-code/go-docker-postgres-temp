@@ -1,7 +1,15 @@
-FROM golang:1.19.1-alpine
-
-RUN mkdir -p /usr/local/go/src/react_go_app/app
+FROM golang:1.21.6
 
 WORKDIR /usr/local/go/src/react_go_app/app
 
-RUN apk update && apk add git
+# アプリケーションのソースコードをコピー
+COPY ./app .
+
+# 依存関係のダウンロード
+RUN go mod download
+
+# アプリケーションのビルド
+RUN go build -o main .
+
+EXPOSE 8080
+
