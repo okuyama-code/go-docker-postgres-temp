@@ -105,10 +105,28 @@ psql -U postgres -d react_go_app
 SELECT * FROM users;
 ```
 
-
 PostgreSQLのプロンプトを終了する \はoption + ¥
 ```
 \q
 ```
 
-
+### data reset (ここは今後修正する必要あり) migrationファイルを読み込むコマンドを追加したい。migrationファイルを作成するところを調べる。
+go run main.goをしている場合はキャンセルしておく
+```
+docker compose exec db bash
+```
+```
+su - postgres -c "psql -d postgres -c 'DROP DATABASE IF EXISTS react_go_app;'"
+```
+```
+su - postgres -c "psql -d postgres -c 'CREATE DATABASE react_go_app;'"
+```
+```
+psql -U postgres -d react_go_app
+```
+```
+\dt
+```
+react_go_app=# \dt
+リレーションが見つかりませんでした。
+こうなればOK
