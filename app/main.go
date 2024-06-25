@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -15,18 +16,48 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"go-api/migrations"
 )
 
 type User struct {
 	gorm.Model
-	Username string `gorm:"type:varchar(100);unique_index" json:"username"`
-	Password string `gorm:"type:varchar(100)" json:"password,omitempty"`
+	Username    string    `gorm:"type:varchar(100);unique_index;not null"`
+	Password    string    `gorm:"type:varchar(100);not null"`
+	Name        string    `gorm:"type:varchar(100);not null"`
+	DateOfBirth *time.Time `gorm:"type:date"`
 }
 
 var DB *gorm.DB
 
 func main() {
-	fmt.Println("main.goが呼ばれました")
+	migrateFlag := flag.Bool("migrate", false, "Run database migrations")
+	resetFlag := flag.Bool("reset", false, "Reset database and run migrations")
+	dropFlag := flag.Bool("drop", false, "Drop all tables")
+	flag.Parse()
+
+	if *dropFlag {
+		err := migrations.DropTables()
+		if err != nil {
+			log.Fatalf("Failed to drop tables: %v", err)
+		}
+		return
+	}
+
+	if *resetFlag {
+		err := migrations.ResetAndMigrate()
+		if err != nil {
+			log.Fatalf("Failed to reset and migrate database: %v", err)
+		}
+		return
+	}
+
+	if *migrateFlag {
+		err := migrations.Migrate()
+		if err != nil {
+			log.Fatalf("Failed to migrate database: %v", err)
+		}
+		return
+	}
 
 	err := godotenv.Load()
 	if err != nil {
@@ -68,8 +99,9 @@ func main() {
 func register(c *gin.Context) {
 	var user User
 	if err := c.BindJSON(&user); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+			log.Printf("Error binding JSON: %v", err)
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
 	}
 
 	if user.Username == "" {
@@ -79,6 +111,11 @@ func register(c *gin.Context) {
 
 	if user.Password == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Password is required"})
+		return
+	}
+
+	if user.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Name is required"})
 		return
 	}
 
@@ -93,7 +130,18 @@ func register(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error while registering user"})
 		return
 	}
-	c.JSON(http.StatusOK, user)
+
+	responseUser := struct {
+		ID          uint       `json:"id"`
+		Username    string     `json:"username"`
+		Name        string     `json:"name"`
+	}{
+		ID:          user.ID,
+		Username:    user.Username,
+		Name:        user.Name,
+	}
+
+	c.JSON(http.StatusOK, responseUser)
 }
 
 func login(c *gin.Context) {
@@ -141,6 +189,7 @@ func login(c *gin.Context) {
 		return
 	}
 
+	user.Password = ""
 	c.JSON(http.StatusOK, gin.H{"token": tokenString})
 }
 
@@ -172,8 +221,20 @@ func getCurrentUser(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "User not found"})
 			return
 		}
-		user.Password = "" // パスワードを除外
-		c.JSON(http.StatusOK, user)
+
+		responseUser := struct {
+			ID          uint       `json:"id"`
+			Username    string     `json:"username"`
+			Name        string     `json:"name"`
+			DateOfBirth *time.Time `json:"date_of_birth"`
+		}{
+			ID:          user.ID,
+			Username:    user.Username,
+			Name:        user.Name,
+			DateOfBirth: user.DateOfBirth,
+		}
+
+		c.JSON(http.StatusOK, responseUser)
 	} else {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
 	}

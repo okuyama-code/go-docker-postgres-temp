@@ -110,23 +110,25 @@ PostgreSQLのプロンプトを終了する \はoption + ¥
 \q
 ```
 
-### data reset (ここは今後修正する必要あり) migrationファイルを読み込むコマンドを追加したい。migrationファイルを作成するところを調べる。
-go run main.goをしている場合はキャンセルしておく
+## DB migrate drop migrate:reset
+コンテナに入ってから
 ```
-docker compose exec db bash
+docker compose exec app bash
 ```
+
+migrate
 ```
-su - postgres -c "psql -d postgres -c 'DROP DATABASE IF EXISTS react_go_app;'"
+go run main.go -migrate
 ```
+
+drop
 ```
-su - postgres -c "psql -d postgres -c 'CREATE DATABASE react_go_app;'"
+go run main.go -drop
 ```
+
+migrate:reset
 ```
-psql -U postgres -d react_go_app
+go run main.go -reset
 ```
-```
-\dt
-```
-react_go_app=# \dt
-リレーションが見つかりませんでした。
-こうなればOK
+
+
