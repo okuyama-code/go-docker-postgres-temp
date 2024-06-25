@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
@@ -19,7 +20,7 @@ import (
 type User struct {
 	gorm.Model
 	Username string `gorm:"type:varchar(100);unique_index" json:"username"`
-	Password string `gorm:"type:varchar(100)" json:"password"`
+	Password string `gorm:"type:varchar(100)" json:"password,omitempty"`
 }
 
 var DB *gorm.DB
@@ -58,6 +59,8 @@ func main() {
 
 	r.POST("/register", register)
 	r.POST("/login", login)
+	r.GET("/current-user", getCurrentUser)
+	r.POST("/logout", logout)
 
 	r.Run()
 }
@@ -139,4 +142,45 @@ func login(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"token": tokenString})
+}
+
+func getCurrentUser(c *gin.Context) {
+	tokenString := c.GetHeader("Authorization")
+	if tokenString == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "No token provided"})
+		return
+	}
+
+	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
+
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(os.Getenv("JWT_SECRET")), nil
+	})
+
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+		return
+	}
+
+	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+		username := claims["username"].(string)
+		var user User
+		if err := DB.Where("username = ?", username).First(&user).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "User not found"})
+			return
+		}
+		user.Password = "" // パスワードを除外
+		c.JSON(http.StatusOK, user)
+	} else {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+	}
+}
+
+func logout(c *gin.Context) {
+	// サーバーサイドでのログアウト処理は特に必要ありません
+	// クライアント側でトークンを削除することでログアウトとみなします
+	c.JSON(http.StatusOK, gin.H{"message": "Logged out successfully"})
 }
