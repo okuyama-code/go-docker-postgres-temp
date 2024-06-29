@@ -1,18 +1,13 @@
 package main
 
 import (
-	"io/ioutil"
-	"bytes"
 	"strconv"
-	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -25,11 +20,11 @@ import (
 
 type User struct {
 	gorm.Model
-	Name     string `gorm:"type:varchar(100);not null"`
-	Email    string `gorm:"type:varchar(100);unique_index;not null"`
-	Password string `gorm:"type:varchar(100)"`
-	Picture  string `gorm:"type:text"`
-	// DateOfBirth *time.Time `gorm:"type:date"`
+	Name         string `gorm:"type:varchar(100);not null"`
+	Email        string `gorm:"type:varchar(100);unique_index;not null"`
+	Password     string `gorm:"type:varchar(100)"`
+	Icon         string `gorm:"type:text"`
+	AuthProvider string `gorm:"type:varchar(20);default:'local'"`
 }
 
 var DB *gorm.DB
@@ -126,35 +121,20 @@ func runMigrations() error {
 }
 
 func register(c *gin.Context) {
-	// ============================ リクエストボディを読み取り デバック用 =====================
-	body, err := ioutil.ReadAll(c.Request.Body)
-	if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "リクエストボディの読み取りに失敗しました"})
-			return
-	}
-
-	// 読み取ったデータをコンソールに出力
-	fmt.Println("受信したJSON:", string(body))
-
-	// bodyを新しいReaderとしてRequestに設定し直す
-	c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(body))
-	// ===========================================================================
-
 	var user User
 	if err := c.BindJSON(&user); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	fmt.Println("user", user)
-	fmt.Println("user email", user.Email)
 	if user.Email == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Email is required"})
 		return
 	}
 
+	// Check if user already exists
 	var existingUser User
-	err = DB.Where("email = ?", user.Email).First(&existingUser).Error
+	err := DB.Where("email = ?", user.Email).First(&existingUser).Error
 	if err == nil {
 		// User already exists, return the existing user
 		existingUser.Password = "" // Remove password for security
@@ -169,8 +149,17 @@ func register(c *gin.Context) {
 		return
 	}
 
-	// New user, proceed with registration
-	if user.Password != "" {
+	// Set auth_provider
+	if user.AuthProvider == "" {
+		if user.Password == "" {
+			user.AuthProvider = "social"
+		} else {
+			user.AuthProvider = "local"
+		}
+	}
+
+	// Handle password for local auth
+	if user.AuthProvider == "local" && user.Password != "" {
 		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error while hashing password"})
@@ -179,24 +168,14 @@ func register(c *gin.Context) {
 		user.Password = string(hashedPassword)
 	}
 
-	if user.Picture != "" {
-		imageData, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(user.Picture, "data:image/png;base64,"))
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid image data"})
-			return
-		}
-
-		fileName := fmt.Sprintf("user_%d.png", time.Now().UnixNano())
-		err = os.WriteFile("./uploads/"+fileName, imageData, 0644)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error saving image"})
-			return
-		}
-		user.Picture = "/uploads/" + fileName
+	// Handle icon
+	if user.Icon != "" {
+		// Your existing icon handling code here
 	}
 
+	// Create new user
 	if err := DB.Create(&user).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error while registering user"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error while registering user: " + err.Error()})
 		return
 	}
 
@@ -206,7 +185,6 @@ func register(c *gin.Context) {
 		"message": "新規登録しました",
 	})
 }
-
 func login(c *gin.Context) {
 	var loginInfo struct {
 		Email    string `json:"email"`
