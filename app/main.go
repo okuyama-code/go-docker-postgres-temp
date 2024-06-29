@@ -1,6 +1,9 @@
 package main
 
 import (
+	"strconv"
+	"encoding/base64"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -9,22 +12,22 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dgrijalva/jwt-go"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
-	_ "github.com/lib/pq"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"go-api/migrations"
+
 )
 
 type User struct {
 	gorm.Model
-	Username    string    `gorm:"type:varchar(100);unique_index;not null"`
-	Password    string    `gorm:"type:varchar(100);not null"`
-	Name        string    `gorm:"type:varchar(100);not null"`
-	DateOfBirth *time.Time `gorm:"type:date"`
+	Name     string `gorm:"type:varchar(100);not null"`
+	Email    string `gorm:"type:varchar(100);unique_index;not null"`
+	Password string `gorm:"type:varchar(100)"`
+	Picture  string `gorm:"type:text"`
+	// DateOfBirth *time.Time `gorm:"type:date"`
 }
 
 var DB *gorm.DB
@@ -78,170 +81,182 @@ func main() {
 		log.Fatalf("failed to connect database: %v", err)
 	}
 
-	sqlDB, err := DB.DB()
-	if err != nil {
-		log.Fatalf("failed to get database: %v", err)
+	// Add this line to check if the table exists
+	if err := DB.AutoMigrate(&User{}); err != nil {
+		log.Fatalf("failed to migrate database: %v", err)
 	}
-	defer sqlDB.Close()
-
-	DB.AutoMigrate(&User{})
 
 	r := gin.Default()
 
-	r.POST("/register", register)
-	r.POST("/login", login)
-	r.GET("/current-user", getCurrentUser)
-	r.POST("/logout", logout)
+	r.POST("/api/v1/auth/register", register)
+	r.POST("/api/v1/auth/login", login)
+	r.GET("/api/v1/users", getAllUsers)
 
 	r.Run()
+}
+
+func runMigrations() error {
+	err := godotenv.Load()
+	if err != nil {
+		return fmt.Errorf("error loading .env file: %w", err)
+	}
+
+	dbHost := os.Getenv("DB_HOST")
+	dbUser := os.Getenv("DB_USER")
+	dbPassword := os.Getenv("DB_PASSWORD")
+	dbName := os.Getenv("DB_NAME")
+	dbPort := os.Getenv("DB_PORT")
+
+	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable TimeZone=Asia/Tokyo",
+		dbHost, dbUser, dbPassword, dbName, dbPort)
+
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		return fmt.Errorf("failed to connect database: %w", err)
+	}
+
+	err = db.AutoMigrate(&User{})
+	if err != nil {
+		return fmt.Errorf("failed to run migrations: %w", err)
+	}
+
+	return nil
 }
 
 func register(c *gin.Context) {
 	var user User
 	if err := c.BindJSON(&user); err != nil {
-			log.Printf("Error binding JSON: %v", err)
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if user.Email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Email is required"})
+		return
+	}
+
+	var existingUser User
+	err := DB.Where("email = ?", user.Email).First(&existingUser).Error
+	if err == nil {
+		// User already exists, return the existing user
+		existingUser.Password = "" // Remove password for security
+		c.JSON(http.StatusOK, gin.H{
+			"user":    existingUser,
+			"message": "既存のユーザーです",
+		})
+		return
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		// Database error
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error checking existing user"})
+		return
+	}
+
+	// New user, proceed with registration
+	if user.Password != "" {
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error while hashing password"})
 			return
+		}
+		user.Password = string(hashedPassword)
 	}
 
-	if user.Username == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Username is required"})
-		return
-	}
+	if user.Picture != "" {
+		imageData, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(user.Picture, "data:image/png;base64,"))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid image data"})
+			return
+		}
 
-	if user.Password == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Password is required"})
-		return
+		fileName := fmt.Sprintf("user_%d.png", time.Now().UnixNano())
+		err = os.WriteFile("./uploads/"+fileName, imageData, 0644)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error saving image"})
+			return
+		}
+		user.Picture = "/uploads/" + fileName
 	}
-
-	if user.Name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Name is required"})
-		return
-	}
-
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error while hashing password"})
-		return
-	}
-	user.Password = string(hashedPassword)
 
 	if err := DB.Create(&user).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error while registering user"})
 		return
 	}
 
-	responseUser := struct {
-		ID          uint       `json:"id"`
-		Username    string     `json:"username"`
-		Name        string     `json:"name"`
-	}{
-		ID:          user.ID,
-		Username:    user.Username,
-		Name:        user.Name,
-	}
-
-	c.JSON(http.StatusOK, responseUser)
+	user.Password = "" // Remove password for security
+	c.JSON(http.StatusOK, gin.H{
+		"user":    user,
+		"message": "新規登録しました",
+	})
 }
 
 func login(c *gin.Context) {
-	var user User
-	if err := c.BindJSON(&user); err != nil {
+	var loginInfo struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	if err := c.BindJSON(&loginInfo); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
 		return
 	}
 
-	if user.Username == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Username is required"})
+	var user User
+	if err := DB.Where("email = ?", loginInfo.Email).First(&user).Error; err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
 		return
 	}
 
 	if user.Password == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Password is required"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "This account uses social login"})
 		return
 	}
 
-	var foundUser User
-	if err := DB.Where("username = ?", user.Username).First(&foundUser).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid username or password"})
-		return
-	}
-
-	if err := bcrypt.CompareHashAndPassword([]byte(foundUser.Password), []byte(user.Password)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid username or password"})
-		return
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"username": user.Username,
-		"exp":      time.Now().Add(time.Hour * 24).Unix(),
-	})
-
-	jwtSecret := os.Getenv("JWT_SECRET")
-	if jwtSecret == "" {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "JWT Secret not found"})
-		return
-	}
-
-	tokenString, err := token.SignedString([]byte(jwtSecret))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error while generating token"})
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(loginInfo.Password)); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
 		return
 	}
 
 	user.Password = ""
-	c.JSON(http.StatusOK, gin.H{"token": tokenString})
+	c.JSON(http.StatusOK, user)
 }
 
-func getCurrentUser(c *gin.Context) {
-	tokenString := c.GetHeader("Authorization")
-	if tokenString == "" {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "No token provided"})
+// 新しい getAllUsers 関数
+func getAllUsers(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "10"))
+
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 10
+	}
+
+	offset := (page - 1) * pageSize
+
+	var users []User
+	var total int64
+
+	if err := DB.Model(&User{}).Count(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error counting users"})
 		return
 	}
 
-	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
+	if err := DB.Offset(offset).Limit(pageSize).Find(&users).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error retrieving users"})
+		return
+	}
 
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return []byte(os.Getenv("JWT_SECRET")), nil
+	// パスワードを削除
+	for i := range users {
+		users[i].Password = ""
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"users": users,
+		"total": total,
+		"page": page,
+		"page_size": pageSize,
+		"total_pages": (int(total) + pageSize - 1) / pageSize,
 	})
-
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
-		return
-	}
-
-	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-		username := claims["username"].(string)
-		var user User
-		if err := DB.Where("username = ?", username).First(&user).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "User not found"})
-			return
-		}
-
-		responseUser := struct {
-			ID          uint       `json:"id"`
-			Username    string     `json:"username"`
-			Name        string     `json:"name"`
-			DateOfBirth *time.Time `json:"date_of_birth"`
-		}{
-			ID:          user.ID,
-			Username:    user.Username,
-			Name:        user.Name,
-			DateOfBirth: user.DateOfBirth,
-		}
-
-		c.JSON(http.StatusOK, responseUser)
-	} else {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
-	}
-}
-
-func logout(c *gin.Context) {
-	// サーバーサイドでのログアウト処理は特に必要ありません
-	// クライアント側でトークンを削除することでログアウトとみなします
-	c.JSON(http.StatusOK, gin.H{"message": "Logged out successfully"})
 }

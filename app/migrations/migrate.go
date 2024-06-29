@@ -12,10 +12,11 @@ import (
 
 type User struct {
 	gorm.Model
-	Username    string    `gorm:"type:varchar(100);unique_index;not null"`
-	Password    string    `gorm:"type:varchar(100);not null"`
-	Name        string    `gorm:"type:varchar(100);not null"`
-	DateOfBirth time.Time `gorm:"type:date"`
+	Name     string `gorm:"type:varchar(100);not null"`
+	Email    string `gorm:"type:varchar(100);unique_index;not null"`
+	Password string `gorm:"type:varchar(100)"`
+	Picture  string `gorm:"type:text"`
+	DateOfBirth *time.Time `gorm:"type:date"`
 }
 
 func getDB() (*gorm.DB, error) {
