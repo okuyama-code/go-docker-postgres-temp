@@ -1,6 +1,8 @@
 package main
 
 import (
+	"io/ioutil"
+	"bytes"
 	"strconv"
 	"encoding/base64"
 	"errors"
@@ -124,19 +126,35 @@ func runMigrations() error {
 }
 
 func register(c *gin.Context) {
+	// ============================ リクエストボディを読み取り デバック用 =====================
+	body, err := ioutil.ReadAll(c.Request.Body)
+	if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "リクエストボディの読み取りに失敗しました"})
+			return
+	}
+
+	// 読み取ったデータをコンソールに出力
+	fmt.Println("受信したJSON:", string(body))
+
+	// bodyを新しいReaderとしてRequestに設定し直す
+	c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+	// ===========================================================================
+
 	var user User
 	if err := c.BindJSON(&user); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
+	fmt.Println("user", user)
+	fmt.Println("user email", user.Email)
 	if user.Email == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Email is required"})
 		return
 	}
 
 	var existingUser User
-	err := DB.Where("email = ?", user.Email).First(&existingUser).Error
+	err = DB.Where("email = ?", user.Email).First(&existingUser).Error
 	if err == nil {
 		// User already exists, return the existing user
 		existingUser.Password = "" // Remove password for security
